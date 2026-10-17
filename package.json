@@ -17,7 +17,7 @@
   "scripts": {
     "dev:web": "npm run dev --workspace @ibtatech/web",
     "dev:mobile": "npm run start --workspace @ibtatech/mobile",
-    "build": "npm run build --workspace @ibtatech/web",
+    "build": "npx prisma generate --schema=packages/leads/prisma/schema.prisma && npm run build --workspace @ibtatech/web",
     "lint": "eslint .",
     "test": "npm run test --workspaces --if-present",
     "format": "prettier --write .",
