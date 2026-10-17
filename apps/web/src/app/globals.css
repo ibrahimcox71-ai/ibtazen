@@ -1,0 +1,241 @@
+/*
+ * Global base styles — Ibtatech web.
+ * Single Tailwind entry: imports the framework and the shared token package,
+ * then sets document-level defaults (base surface, text, focus, scrollbar).
+ */
+
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Scan the design system package — component classes live there. */
+@source "../../../../packages/ui/src";
+
+@import "@ibtatech/ui/tokens.css";
+
+html {
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+body {
+  background-color: var(--surface);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  /* Defend against horizontal overflow at every width */
+  overflow-x: clip;
+  min-height: 100dvh;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+.home-hero {
+  background: linear-gradient(
+    to bottom,
+    var(--surface) 0%,
+    var(--surface) 68%,
+    var(--surface-sunken) 100%
+  );
+}
+
+.home-hero h1 {
+  font-size: var(--text-hero);
+  font-weight: var(--text-hero--font-weight);
+  letter-spacing: var(--text-hero--letter-spacing);
+  line-height: var(--text-hero--line-height);
+}
+
+.home-product-visual {
+  animation: home-arrive 500ms ease-out both;
+}
+.home-product-float {
+  animation: home-float 7s ease-in-out 500ms infinite alternate;
+}
+.home-phone-float {
+  animation: home-float 8s ease-in-out 700ms infinite alternate-reverse;
+}
+[data-hero-item] {
+  animation: home-arrive 420ms ease-out both;
+}
+[data-hero-item]:nth-child(1) {
+  animation-delay: 0ms;
+}
+[data-hero-item]:nth-child(2) {
+  animation-delay: 60ms;
+}
+[data-hero-item]:nth-child(3) {
+  animation-delay: 120ms;
+}
+[data-hero-item]:nth-child(4) {
+  animation-delay: 180ms;
+}
+[data-hero-item]:nth-child(5) {
+  animation-delay: 240ms;
+}
+@keyframes home-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(1rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes home-float {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-0.5rem);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-product-visual,
+  .home-product-float,
+  .home-phone-float {
+    animation: none;
+  }
+  [data-hero-item] {
+    animation: none;
+  }
+}
+
+::selection {
+  background-color: var(--accent);
+  color: var(--on-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Thin, theme-aware scrollbar (desktop only) */
+@media (pointer: fine) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+}
+
+/* Long-form legal copy (privacy/terms) — defaults for elements the legal
+   sections drop in unstyled. */
+.legal-prose {
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.legal-prose a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.legal-prose ul,
+.legal-prose ol {
+  padding-inline-start: 1.25rem;
+}
+
+.legal-prose ul {
+  list-style: disc;
+}
+
+.legal-prose ol {
+  list-style: decimal;
+}
+
+.legal-prose p + p {
+  margin-top: 0.75rem;
+}
+
+.measurement-table th,
+.measurement-table td {
+  padding: 1rem 1.25rem;
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  vertical-align: top;
+}
+
+.measurement-table thead {
+  background-color: var(--surface-sunken);
+}
+
+.measurement-table tbody tr + tr {
+  border-top: 1px solid var(--border-default);
+}
+
+.measurement-table tbody th {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+@media (max-width: 47.999rem) {
+  .measurement-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
+  }
+
+  .measurement-table,
+  .measurement-table tbody {
+    display: block;
+  }
+
+  .measurement-table tbody {
+    display: grid;
+    gap: 0.75rem;
+    padding: 0.75rem;
+  }
+
+  .measurement-table tbody tr {
+    display: grid;
+    overflow: hidden;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    background-color: var(--surface);
+  }
+
+  .measurement-table tbody tr + tr {
+    border-top: 1px solid var(--border-default);
+  }
+
+  .measurement-table tbody th,
+  .measurement-table tbody td {
+    display: grid;
+    grid-template-columns: minmax(5.5rem, 0.38fr) minmax(0, 1fr);
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+    border-bottom: 1px solid var(--border-subtle);
+    overflow-wrap: anywhere;
+  }
+
+  .measurement-table tbody tr > :last-child {
+    border-bottom: 0;
+  }
+
+  .measurement-table tbody th::before,
+  .measurement-table tbody td::before {
+    content: attr(data-label);
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+}

@@ -1,0 +1,436 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// SQLite now for zero-infra verifiability; provider-portable to Postgres.
+// Swap `provider` to "postgresql" and update DATABASE_URL to move.
+
+model Lead {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  /// Duplicate protection: lowercased email + source, while status = new.
+  openLeadKey String?
+
+  name             String
+  email            String
+  phone            String?
+  company          String?
+  website          String?
+  country          String?
+  source           String
+  status           String  @default("new")
+  budgetBand       String?
+  timeline         String?
+  message          String
+  consent          Boolean
+  marketingConsent Boolean @default(false)
+  /// Legacy free-text column from Phase 4 — CRM notes live in LeadNote.
+  notes            String?
+  /// Flow-specific detail (platform, adSpend, goal, estimate steps) as JSON.
+  detail           String?
+
+  internalNotes LeadNote[]
+  activities    LeadActivity[]
+  followUps     FollowUp[]
+  proposals     Proposal[]
+  /// One Client per won lead (Phase 9) — set only by explicit conversion.
+  client        Client?
+
+  /// CRM assignee — nullable; set via admin assignment (Phase 6).
+  assignedToId String?
+  assignedTo   AdminUser? @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  @@unique([openLeadKey])
+  @@index([status, createdAt])
+  @@index([source, createdAt])
+  @@index([email])
+  @@index([assignedToId, status])
+}
+
+/// Internal CRM operator. Created only via bootstrap — never by public signup.
+model AdminUser {
+  id           String    @id @default(cuid())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  email        String
+  name         String
+  /// scrypt hash format — never a plaintext or reversible credential.
+  passwordHash String
+  /// "admin" | "staff" | "client" — open string for future roles; validated
+  /// in domain (`canAccessCrm` / `canAccessPortal`). Never from client input.
+  role         String    @default("staff")
+  active       Boolean   @default(true)
+  lastLoginAt  DateTime?
+
+  /// Client portal link — set only for role = "client" (Client Portal).
+  /// One portal login per Client; a user without it can never open a session.
+  clientId String? @unique
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  sessions           AdminSession[]
+  leadNotes          LeadNote[]
+  assignedLeads      Lead[]         @relation("LeadAssignee")
+  activities         LeadActivity[]
+  followUpsAssigned  FollowUp[]     @relation("FollowUpAssignee")
+  followUpsCreated   FollowUp[]     @relation("FollowUpCreator")
+  proposalsCreated   Proposal[]     @relation("ProposalCreator")
+  clientsCreated     Client[]       @relation("ClientCreator")
+  contractsCreated   Contract[]     @relation("ContractCreator")
+  projectsCreated    Project[]      @relation("ProjectCreator")
+  invoicesCreated    Invoice[]      @relation("InvoiceCreator")
+  caseStudiesCreated CaseStudy[]    @relation("CaseStudyCreator")
+  blogPostsCreated   BlogPost[]     @relation("BlogPostCreator")
+
+  @@unique([email])
+  @@index([role, active])
+}
+
+/// Server-side session record — the cookie holds only an opaque token.
+model AdminSession {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  /// HMAC-SHA256(AUTH_SECRET, rawToken) — DB alone cannot forge a session.
+  tokenHash String
+  userId    String
+  user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tokenHash])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Internal-only CRM notes — never returned by public lead responses.
+model LeadNote {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  body      String
+  leadId    String
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    AdminUser @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
+  @@index([authorId])
+}
+
+/// Append-only audit trail for CRM mutations (Phase 6).
+/// Never updated or deleted by application code.
+model LeadActivity {
+  id         String    @id @default(cuid())
+  createdAt  DateTime  @default(now())
+  /// Append-only CRM activity kind — see LEAD_ACTIVITY_TYPES in domain.ts
+  /// (status_change, assigned, follow_up_*, proposal_*, converted_to_client).
+  type       String
+  leadId     String
+  lead       Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  actorId    String
+  actor      AdminUser @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  fromStatus String?
+  toStatus   String?
+  /// JSON metadata: assignee names, follow-up titles, due dates, etc.
+  metadata   String?
+
+  @@index([leadId, createdAt])
+  @@index([actorId])
+  @@index([type, createdAt])
+}
+
+/// Follow-up task attached to a lead (Phase 6).
+model FollowUp {
+  id          String     @id @default(cuid())
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  title       String
+  body        String?
+  /// ISO date string YYYY-MM-DD — when the follow-up is due.
+  dueDate     String
+  completedAt DateTime?
+  leadId      String
+  lead        Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  /// Optional assignee; defaults to lead assignee or creator when set.
+  assigneeId  String?
+  assignee    AdminUser? @relation("FollowUpAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  creatorId   String
+  creator     AdminUser  @relation("FollowUpCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
+  @@index([assigneeId, completedAt, dueDate])
+  @@index([dueDate, completedAt])
+  @@index([creatorId])
+}
+
+/// Commercial proposal attached to a lead (Phase 7).
+/// Line items are JSON (ordered array). Money is integer minor units.
+/// Sent/accepted snapshots are immutable — revise via a new version.
+model Proposal {
+  id            String     @id @default(cuid())
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  leadId        String
+  lead          Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdById   String
+  createdBy     AdminUser  @relation("ProposalCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  /// 1-based per lead; unique with leadId to prevent concurrent duplicates.
+  version       Int
+  /// "draft" | "sent" | "accepted" | "declined"
+  status        String     @default("draft")
+  title         String
+  currency      String     @default("GBP")
+  /// ISO date YYYY-MM-DD — commercial validity end (inclusive display).
+  validUntil    String
+  notes         String?
+  /// Ordered line items: [{ description, quantity, unitPriceMinor }]
+  lines         String
+  subtotalMinor Int
+  totalMinor    Int
+  sentAt        DateTime?
+  acceptedAt    DateTime?
+  declinedAt    DateTime?
+  contracts     Contract[]
+
+  @@unique([leadId, version])
+  @@index([leadId, createdAt])
+  @@index([status, createdAt])
+}
+
+/// First-class client converted from a won lead (Phase 9).
+/// Profile fields are copied server-side from the Lead at conversion —
+/// never accepted from the browser. `leadId` is unique: one client per lead.
+model Client {
+  id               String     @id @default(cuid())
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  leadId           String     @unique
+  lead             Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdById      String
+  createdBy        AdminUser  @relation("ClientCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  name             String
+  email            String
+  phone            String?
+  organizationName String?
+  /// Lead pipeline status at conversion time — "won" for this phase.
+  sourceStatus     String     @default("won")
+  contracts        Contract[]
+  projects         Project[]
+  /// The read-only Client Portal login for this client (role = "client").
+  portalUser       AdminUser?
+
+  @@index([createdAt])
+  @@index([email])
+}
+
+/// Internal commercial contract snapshot from an accepted proposal (Phase 11).
+/// NOT an e-signature system. Snapshot fields are copied server-side at
+/// creation and never silently change when the source proposal later edits
+/// (accepted proposals are already immutable). Uniqueness rule: one Contract
+/// per accepted Proposal (proposalId unique) — equivalent to one per Client +
+/// accepted proposal version, because Client is 1:1 with Lead and Proposal
+/// versions are unique per Lead.
+model Contract {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clientId    String
+  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  proposalId  String    @unique
+  proposal    Proposal  @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   AdminUser @relation("ContractCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  /// "draft" | "out_for_signature" | "active" | "void" — server-validated only.
+  status           String    @default("draft")
+  /// Accepted proposal version frozen at contract creation.
+  proposalVersion  Int
+  title            String
+  currency         String    @default("GBP")
+  /// ISO date YYYY-MM-DD — commercial validity end copied from the proposal.
+  validUntil       String
+  clientName       String
+  clientEmail      String
+  organizationName String?
+  /// Ordered line items JSON snapshot: [{ description, quantity, unitPriceMinor }]
+  lines            String
+  subtotalMinor    Int
+  totalMinor       Int
+  projects         Project[]
+  invoice          Invoice?
+
+  @@index([clientId, createdAt])
+  @@index([status, createdAt])
+  @@index([createdById])
+}
+
+/// Internal invoice opened from an ACTIVE Contract (Phase 14).
+/// Financial fields are a server-side snapshot of the Contract at creation —
+/// never recalculated from browser input. One Invoice per Contract.
+/// Status is manually advanced by a CRM actor; "paid" is a manual internal
+/// mark, not a payment-gateway confirmation. No tax, discount, or ledger.
+model Invoice {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contractId  String    @unique
+  contract    Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   AdminUser @relation("InvoiceCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  /// Server-generated sequential reference (INV-000001, …). Never from browser.
+  invoiceNumber String  @unique
+  /// "draft" | "sent" | "paid" | "void" — server-validated only.
+  status        String  @default("draft")
+  currency      String  @default("GBP")
+  /// ISO date YYYY-MM-DD — when the invoice was issued (mirrors createdAt date).
+  issueDate     String
+  /// ISO date YYYY-MM-DD — operational payment deadline for display only.
+  /// No overdue status is derived from this field.
+  dueDate       String?
+  title         String
+  /// Ordered line items JSON snapshot: [{ description, quantity, unitPriceMinor }]
+  lines         String
+  subtotalMinor Int
+  totalMinor    Int
+
+  @@index([status, createdAt])
+  @@index([createdById])
+}
+
+/// Marketing case study backing the public "Selected work" section (Phase 16).
+/// One row per landing slot: `slotNumber` is unique, so slot 1 is the single
+/// featured story. Only `PUBLISHED` rows are ever read by the public site —
+/// `IN_PRODUCTION` is an editorial work-in-progress state.
+/// `metrics` is a JSON array string: [{ label, value }].
+model CaseStudy {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  title         String
+  clientName    String
+  /// URL segment for the public detail page (/case-studies/[slug]).
+  /// Stable across title edits; unique across all rows. The "" default only
+  /// exists because SQLite needs one to add the column — service code always
+  /// writes a real slug.
+  slug          String  @default("")
+  /// 1-based landing slot (unique) - 1 is the featured slot on the homepage.
+  slotNumber    Int
+  description   String
+  /// Ordered metrics JSON snapshot: [{ label, value }]
+  metrics       String  @default("[]")
+  /// "IN_PRODUCTION" | "PUBLISHED" - server-validated only.
+  status        String  @default("IN_PRODUCTION")
+  imagePath     String?
+  imageAlt      String?
+  /// YouTube/Vimeo share link, stored as its canonical embed URL (Phase 27).
+  videoEmbedUrl String?
+  sortOrder     Int     @default(0)
+
+  createdById String
+  createdBy   AdminUser @relation("CaseStudyCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@unique([slug])
+  @@unique([slotNumber])
+  @@index([status, slotNumber])
+  @@index([status, sortOrder])
+}
+
+/// Long-form article behind the public /blog (Phase 25). Only `PUBLISHED`
+/// rows are ever read without an actor; `publishedAt` is stamped on the first
+/// publish and is what the sitemap, RSS feed and Article JSON-LD report.
+/// `content` is a constrained Markdown subset rendered by apps/web, `tags` a
+/// JSON array string: ["seo", "nextjs"].
+model BlogPost {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// URL segment for /blog/[slug] - unique, stable across title edits.
+  slug        String
+  title       String
+  /// Search/list summary shown on cards and meta description fallback.
+  excerpt     String
+  content     String
+  tags        String    @default("[]")
+  /// "DRAFT" | "PUBLISHED" - server-validated only.
+  status      String    @default("DRAFT")
+  publishedAt DateTime?
+
+  /// Cover image key under uploads/blog/ (Phase 26) - null means no cover.
+  imagePath     String?
+  /// Screen-reader description for the cover; blank falls back to the title.
+  imageAlt      String?
+  /// YouTube/Vimeo watch URL rendered as a 16:9 embed on the article page.
+  videoEmbedUrl String?
+
+  createdById String
+  createdBy   AdminUser @relation("BlogPostCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@unique([slug])
+  @@index([status, publishedAt])
+}
+
+/// Internal delivery project opened from an ACTIVE Contract (Phase 12).
+/// Not a project-management system — a registry row only. Money/lines stay
+/// on Contract/Client; `contractId` is unique (one Project per Contract).
+model Project {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clientId    String
+  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  contractId  String    @unique
+  contract    Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   AdminUser @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  name          String
+  description   String?
+  /// "planning" | "active" | "review" | "paused" | "completed" | "archived"
+  status        String  @default("planning")
+  /// ISO date YYYY-MM-DD — optional schedule fields.
+  startDate     String?
+  targetEndDate String?
+
+  @@index([clientId, createdAt])
+  @@index([status, createdAt])
+  @@index([createdById])
+}
+
+/// Singleton site presentation settings (Phase 28) — `id` is the literal
+/// "site". The bytes live under uploads/brand/ in apps/web; these columns only
+/// hold the filename keys, so validation in the service is what stands
+/// between client input and disk.
+model SiteSetting {
+  id          String   @id
+  /// Logo key under uploads/brand/ — null means the text wordmark is rendered.
+  logoPath    String?
+  /// Favicon key under uploads/brand/ — null means /favicon.svg is served.
+  faviconPath String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// Public people profiles managed from `/admin/team`.
+model TeamMember {
+  id          String   @id @default(cuid())
+  name        String
+  role        String
+  bio         String?
+  photoUrl    String?
+  linkedinUrl String?
+  published   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([published, sortOrder])
+}
